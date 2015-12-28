@@ -1,5 +1,6 @@
 # CSVXpose
-CSV transposer for Big-Data CSV files from Central Medical Services
+CSV transposer designed for Big-Data CSV files from Central Medicare Services
+Java-driven application designed to work with CSV and Excel files containing larger than 1,048,576 rows (Excel physical limit) 
 
 XPosGUI - Run to view in-progress GUI
 HDSXPos - CSV transposer called by XPosGUI
