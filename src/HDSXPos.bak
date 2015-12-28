@@ -1,0 +1,191 @@
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.Reader;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+
+import org.apache.commons.csv.CSVFormat;
+import org.apache.commons.csv.CSVPrinter;
+import org.apache.commons.csv.CSVRecord;
+import org.apache.commons.lang3.math.NumberUtils;
+
+public class HDSXPos {
+
+	private SpecSheet specSheet;
+	private HashMap<Integer, RowRecord> valuePair;
+	private ArrayList<RowRecord> matches;
+	private ArrayList<Object[]> outList;
+	private HashSet<String> reportRecordNumbers;
+	private ArrayList<String> reportRecordNumbersArrayList;
+	private String header;
+	private static final String NEW_LINE_SEPARATOR = "\n";
+	private String inFile;
+	private String outFile;
+	private int fileWidth;
+	private String dir;
+
+	public HDSXPos(String inFile, String outFile) {
+		this.valuePair = new HashMap<Integer, RowRecord>();
+		this.matches = new ArrayList<RowRecord>();
+		this.reportRecordNumbers = new HashSet<String>();
+		this.reportRecordNumbersArrayList = new ArrayList<String>();
+		this.outList = new ArrayList<Object[]>();
+		this.fileWidth = 0;
+		File outDir = new File("sql");
+		outDir.mkdir();
+		this.dir = System.getProperty("user.dir") + "/sql/";
+		this.inFile = inFile;
+		this.outFile = dir + outFile;
+	}
+
+	public HDSXPos(SpecSheet specSheet, String inFile, String outFile) {
+		this.valuePair = specSheet.getMap();
+		this.matches = new ArrayList<RowRecord>();
+		this.reportRecordNumbers = new HashSet<String>();
+		this.reportRecordNumbersArrayList = new ArrayList<String>();
+		this.outList = new ArrayList<Object[]>();
+		this.specSheet = specSheet;
+		this.fileWidth = 1 + specSheet.getFileWidth();
+		File outDir = new File("sql");
+		outDir.mkdir();
+		this.dir = System.getProperty("user.dir") + "/sql/";
+		this.inFile = inFile;
+		this.outFile = dir + outFile;
+	}
+
+	private void writeCSV() {
+		FileWriter fileWriter = null;
+		CSVPrinter csvFilePrinter = null;
+		CSVFormat csvFileFormat = CSVFormat.DEFAULT.withRecordSeparator(NEW_LINE_SEPARATOR);
+		try {
+			fileWriter = new FileWriter(outFile);
+			csvFilePrinter = new CSVPrinter(fileWriter, csvFileFormat);
+			Object[] splitHeader = header.split(";");
+			csvFilePrinter.printRecord(splitHeader);
+			for (Object[] s : outList) {
+				Object[] set = s;
+				csvFilePrinter.printRecord(set);
+			}
+		} catch (Exception e) {
+			System.out.println("Error in filewriter");
+			e.printStackTrace();
+		} finally {
+			try {
+				fileWriter.flush();
+				fileWriter.close();
+			} catch (IOException e) {
+				System.out.println("Error while flushing/closing fileWriter/csvPrinter !!!");
+				e.printStackTrace();
+
+			}
+		}
+	}
+
+	public boolean recordHasMatch(RowRecord rec) {
+		for (RowRecord r : valuePair.values()) {
+			if (r.equals(rec)) {
+				return true;
+			}
+			if (r.isChained()) {
+				int baseRow = Integer.parseInt(r.getRow());
+				int lower = baseRow + r.getRangeLower();
+				int upper = baseRow + r.getRangeUpper();
+				int recRow = Integer.parseInt(rec.getRow());
+				if (recRow >= lower && recRow <= upper && rec.getCol().equals(r.getCol()) && rec.getWorksheet().equals(r.getWorksheet())) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	public void generate() {
+		try {
+			header = "rep_rec_num";
+			for (int key : valuePair.keySet()) {
+				header += ";" + valuePair.get(key).getHeader();
+			}
+			Reader in = new FileReader(inFile);
+			Iterable<CSVRecord> records = CSVFormat.EXCEL.parse(in);
+			long start = System.currentTimeMillis();
+			System.out.println("Starting match");
+			for (CSVRecord record : records) {
+				if (recordHasMatch(new RowRecord(record.get(1), record.get(2), record.get(3)))) {
+					matches.add(new RowRecord(record.get(0), record.get(1), record.get(2), record.get(3), record.get(4)));
+				}
+				if (!reportRecordNumbers.contains(record.get(0))) {
+					reportRecordNumbers.add(record.get(0));
+					reportRecordNumbersArrayList.add(record.get(0));
+				}
+			}
+			System.out.println("Matches: " + matches.size());
+			for (String repRec : reportRecordNumbersArrayList) {
+				Object[] row = new Object[fileWidth];
+				row[0] = repRec;
+				// Check records for matches
+				for (RowRecord record : matches) {
+					if (record.getRepRecNum().equals(repRec)) {
+						// Check values in hashMap for match
+						for (int key : valuePair.keySet()) {
+							int valInt = 0;
+							double valDouble = 0.00;
+							RowRecord mapRecord = valuePair.get(key);
+							if (mapRecord.equals(record)) {
+								String recordValue = record.getValue();
+								if (NumberUtils.isNumber(recordValue)) {
+									if (recordValue.contains(".")) {
+										valDouble = Double.parseDouble(recordValue);
+										row[key] = valDouble;
+									} else {
+										valInt = Integer.parseInt(recordValue);
+										row[key] = valInt;
+									}
+								} else {
+									row[key] = recordValue;
+								}
+							}
+							if (mapRecord.isChained()) {
+								// Subrow chaining mostly used for addition of multiple rows under same column for same topic
+								// Determines subrow by checking upper and lower bounds of subrow range while comparing to current row value
+								if (mapRecord.getChainOperation().equals("subrow")) {
+									int baseRow = Integer.parseInt(mapRecord.getRow());
+									int lower = baseRow + mapRecord.getRangeLower();
+									int upper = baseRow + mapRecord.getRangeUpper();
+									int recRow = Integer.parseInt(record.getRow());
+									if (recRow >= lower && recRow <= upper && record.getCol().equals(mapRecord.getCol())
+											&& record.getWorksheet().equals(mapRecord.getWorksheet())) {
+										String recordValue = record.getValue();
+										if (row[key] != null) {
+											if (row[key] instanceof Integer) {
+												valInt += Integer.parseInt(recordValue);
+												row[key] = (Integer) row[key] + valInt;
+											} else if (row[key] instanceof Double) {
+												valDouble += Double.parseDouble(recordValue);
+												row[key] = (Double) row[key] + valDouble;
+											}
+										} else {
+											row[key] = recordValue;
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+				outList.add(row);
+			}
+			writeCSV();
+			long end = System.currentTimeMillis();
+			System.out.println(outFile + " was created successfully.");
+			System.out.println("Time: " + (((double) (end - start)) / 1000) + " seconds");
+		} catch (FileNotFoundException e) {
+			System.out.println(e);
+		} catch (IOException e) {
+			System.out.println(e);
+		}
+	}
+}
